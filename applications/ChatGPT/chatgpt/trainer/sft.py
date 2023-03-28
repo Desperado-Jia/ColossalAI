@@ -15,7 +15,7 @@ from colossalai.logging import get_dist_logger
 
 class SFTTrainer(ABC):
     """
-        Trainer to use while training reward model.
+        Trainer to use while training sft model.
 
     Args:
         model (torch.nn.Module): the model to train
