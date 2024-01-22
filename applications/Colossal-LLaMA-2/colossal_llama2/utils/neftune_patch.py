@@ -15,8 +15,12 @@
 import torch
 
 
-def unwrap(model):
-    return model.unwrap().module
+def unwrap(model: torch.nn.Module) -> torch.nn.Module:
+    """Recursively unwraps a model from wrapper (often used for distributed training)."""
+    if hasattr(model, "module"):
+        return unwrap(model.module)
+    else:
+        return model
 
 
 def neftune_post_forward_hook(module, input, output):
