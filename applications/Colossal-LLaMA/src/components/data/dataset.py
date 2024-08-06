@@ -10,6 +10,7 @@ from .schema.raw import RawSample
 from .schema.tokenized import TokenizedSample
 from .packer.base import Packer
 from ..models.base import ChatLLM
+from ..utils.generic import IGNORE_INDEX
 
 
 SUFFIX_OF_RAW_SAMPLE_PATH = ".jsonl"  # File path of a collection of `RawSample`.
@@ -85,6 +86,15 @@ def prepare_hf_dataset(filenames: Union[str, List[str]],
         num_proc=min(num_workers, len(dataset)),
         desc=f"Tokenizing from `{RawSample.__name__}` to `{TokenizedSample.__name__}`..."
     )  # `HFDataset[TokenizedSample]`.
+    tokenized_dataset = tokenized_dataset.filter(
+        function=lambda item: not set(item["labels"]) == {IGNORE_INDEX},
+        fn_kwargs={},
+        with_indices=False, with_rank=False,
+        batched=False,
+        keep_in_memory=False,
+        num_proc=min(num_workers, len(dataset)),
+        desc=f"Filtering invalid training `{TokenizedSample.__name__}`..."
+    )
     if packer:
         tokenized_dataset = tokenized_dataset.map(
             function=packer,
