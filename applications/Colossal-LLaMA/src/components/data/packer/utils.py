@@ -46,7 +46,8 @@ def _get_seq_len_in_batch(attention_mask: torch.LongTensor) -> torch.Tensor:
 
 
 def get_unpad_data(attention_mask: torch.LongTensor) -> Tuple[torch.Tensor, torch.Tensor, int]:
-    """Modified from:
+    """
+    Modified from:
     https://github.com/huggingface/transformers/blob/main/src/transformers/modeling_flash_attention_utils.py#L33
 
     Args:
