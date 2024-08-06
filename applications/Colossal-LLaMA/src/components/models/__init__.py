@@ -1,4 +1,5 @@
 from typing import Union
+from typing_extensions import Type
 from enum import unique
 
 from .base import ChatLLM, ChatLLMConfig
@@ -9,7 +10,8 @@ from ..utils.generic import ExplicitEnum
 __all__ = [
     "ChatLLM", "ChatLLMConfig",
     "Llama3ChatLLM",
-    "ChatLLMType", "setup_chat_llm"
+    "ChatLLMType",
+    "setup_llm_cls"
 ]
 
 
@@ -26,14 +28,12 @@ _CHAT_LLM_MAPPING = {
 _DEFAULT_KEY = ChatLLMType.LLAMA3
 
 
-def setup_chat_llm(llm_type: Union[str, ChatLLMType] = None, **kwargs) -> ChatLLM:
-    if not llm_type:
-        llm_type = _DEFAULT_KEY
-    llm_type = ChatLLMType(llm_type)
-    if llm_type not in _CHAT_LLM_MAPPING:
+def setup_llm_cls(key: Union[str, ChatLLMType] = None) -> Type[ChatLLM]:
+    if not key:
+        key = _DEFAULT_KEY
+    key = ChatLLMType(key)
+    if key not in _CHAT_LLM_MAPPING:
         raise KeyError(
-            f"Invalid ``llm_type`` ({llm_type.value}) for instantiation `{ChatLLM.__name__}`."
+            f"Invalid ``key`` ({key.value}) for instantiation `{ChatLLM.__name__}`."
         )
-    cls = _CHAT_LLM_MAPPING[llm_type]
-    config = ChatLLMConfig(**kwargs)
-    return cls(config=config)
+    return _CHAT_LLM_MAPPING[key]

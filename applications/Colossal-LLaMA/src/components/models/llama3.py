@@ -1,4 +1,6 @@
 import json
+from contextlib import nullcontext
+from typing import ContextManager
 
 from transformers.models.auto import AutoModel, AutoTokenizer
 
@@ -39,11 +41,12 @@ class Llama3ChatLLM(ChatLLM):
         self.tokenizer.unk_token = self.eos_token
         self.tokenizer.pad_token = self.eos_token
 
-    def init_model(self) -> None:
-        self.model = AutoModel.from_pretrained(
-            pretrained_model_name_or_path=self.config.pretrained_model_name_or_path,
-            trust_remote_code=self.config.trust_remote_code
-        )
+    def init_model(self, context: ContextManager = nullcontext()) -> None:
+        with context:
+            self.model = AutoModel.from_pretrained(
+                pretrained_model_name_or_path=self.config.pretrained_model_name_or_path,
+                trust_remote_code=self.config.trust_remote_code
+            )
 
     def _tokenize(self, sample: RawSample, training: bool) -> TokenizedSample:
         if not self.tokenizer:

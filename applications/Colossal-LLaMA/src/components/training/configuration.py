@@ -4,7 +4,5 @@ from pydantic_settings import BaseSettings
 
 
 class TrainingArguments(BaseSettings):
-    ...
+    
 
-
-class Trainer()
