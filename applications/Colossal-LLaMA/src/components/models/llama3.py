@@ -182,7 +182,7 @@ class Llama3ChatLLM(ChatLLM):
                 f"Unexpected tool call type ({tool_call.type.value}), "
                 f"Only support \"{ToolType.FUNCTION.value}\" tool now."
             )
-        if not tool_call.function:
+        if not tool_call.func:
             raise RuntimeError("Invalid or empty function call.")
         text = (f"The tool \"{tool_call.function.name}\" was called with the following arguments:\n"
                 f"{json.dumps(tool_call.function.arguments, ensure_ascii=False, indent=4)}")
