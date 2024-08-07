@@ -5,7 +5,7 @@ from colossalai.booster import Booster
 from .state import TrainingState
 
 
-def save_checkpoint() -> None:
+def save_checkpoint(output_dir: str, state: TrainingState) -> None:
     raise NotImplementedError()
 
 

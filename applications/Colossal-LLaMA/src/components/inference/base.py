@@ -85,7 +85,7 @@ class InferenceEngine(ABC):
             batched = False
             prompts = [prompts]  # `List[RawSample]`
         if len(prompts) == 0:
-            raise RuntimeError("Empty ``prompts`` is not allowed.")
+            raise RuntimeError("Invalid argument ``prompts``, it must contain at least one valid prompt sample.")
         responses = self._generate(prompts=prompts, **kwargs)
         if not batched:
             return responses[0]
@@ -100,7 +100,10 @@ class InferenceEngine(ABC):
             batched = False
             conversations = [conversations]  # `List[RawSample]`
         if len(conversations) == 0:
-            raise RuntimeError("Empty ``conversations`` is not allowed.")
+            raise RuntimeError(
+                "Invalid argument ``conversations``, "
+                "it must contain at least one valid prompt conversation sample."
+            )
 
         # Verification of each prompt conversation.
         _ = [self._verify_prompt(msgs=sample.messages) for sample in conversations]
@@ -112,7 +115,10 @@ class InferenceEngine(ABC):
         # Postprocess of response.
         outputs = []  # `List[Tuple[Message, Usage]]`
         for content, usage in responses:
-            msg = Message(role=Role.ASSISTANT, content=content)  # TODO: tool calls?
+            msg = self.llm.process_response_message(text=content)  # Contains the situation handling logic
+            # for complex scenarios (e.g., tool calling)
+            if msg.role != Role.ASSISTANT:
+                raise ValueError(f"Invalid response role, must be \"{Role.ASSISTANT.value}\".")
             outputs.append((msg, usage))
 
         if not batched:
