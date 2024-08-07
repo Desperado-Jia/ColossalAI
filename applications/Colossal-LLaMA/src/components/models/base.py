@@ -2,12 +2,13 @@ from typing import Any, ContextManager, Dict, Optional, Union
 
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
+from enum import unique
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
-from ..data.schema.raw import RawSample
+from ..data.schema.raw import RawSample, Message
 from ..data.schema.tokenized import TokenizedSample
-from ..utils.generic import IGNORE_INDEX
+from ..utils.generic import IGNORE_INDEX, Language
 
 
 class ChatLLMConfig(BaseSettings):
@@ -28,6 +29,10 @@ class ChatLLMConfig(BaseSettings):
         default=IGNORE_INDEX,
         description="Specifies a target value that is ignored and does not contribute to the "
                     "gradient of loss function in PyTorch."
+    )
+    language: Union[str, Language] = Field(
+        default=Language.CHINESE,
+        description="Default language setting for automatic completion of prompts in conversations."
     )
 
 
@@ -59,6 +64,15 @@ class ChatLLM(ABC):
         """
         pass
 
+    @abstractmethod
+    def prepare_response_message(self, text: str) -> Message:
+        """Postprocess the response string after model (engine) generation.
+        e.g., handle the situation where a tool call occurs.
+        Note that different models have distinct workflows for post-processing response content.
+        This method only used in inference mode.
+        """
+        pass
+
     def tokenize(self,
                  sample: Union[RawSample, Dict[str, Any]],
                  training: bool = True,
@@ -67,6 +81,11 @@ class ChatLLM(ABC):
         """Tokenize a raw multi-turn conversation sample and get the tokenized input sample
         for both training & inference of transformers-based model.
         """
+        if not self.tokenizer:
+            raise RuntimeError(
+                f"Uninstantiated `{self.__class__.__name__}.tokenizer`, "
+                f"please execute 'init_tokenizer' method first."
+            )
         tokenized_sample = self._tokenize(
             sample=RawSample.model_validate(sample),  # `RawSample`
             training=training
