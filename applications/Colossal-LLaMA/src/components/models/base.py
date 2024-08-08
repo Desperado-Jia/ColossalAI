@@ -1,9 +1,9 @@
-from typing import Any, ContextManager, Dict, Optional, Union
+from typing import Any, ContextManager, Dict, List, NoReturn, Optional, Union
 
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
 from enum import unique
-from pydantic import Field
+from pydantic import Field, ValidationError
 from pydantic_settings import BaseSettings
 
 from ..data.schema.raw import RawSample, Role, Message
@@ -69,11 +69,10 @@ class ChatLLM(ABC):
         pass
 
     @abstractmethod
-    def prepare_response_message(self, text: str) -> Message:
-        """Postprocess the response string after model (engine) generation.
-        e.g., handle the situation where a tool call occurs.
-        Note that different models have distinct workflows for post-processing response content.
-        This method only used in inference mode.
+    def parse_response(self, text: str) -> Message:
+        """Postprocess the response text after generation, e.g., handle function calling.
+        Note that different models have distinct workflows for post-processing, and the method
+        is only used under the inference mode.
         """
         pass
 
@@ -90,8 +89,10 @@ class ChatLLM(ABC):
                 f"Uninstantiated `{self.__class__.__name__}.tokenizer`, "
                 f"please execute 'init_tokenizer' method first."
             )
+        sample = RawSample.model_validate(sample)  # `RawSample`
+        self._check_sample(sample=sample, training=training)
         tokenized_sample = self._tokenize(
-            sample=RawSample.model_validate(sample),  # `RawSample`
+            sample=sample,
             training=training
         )
         if return_dict:
@@ -108,3 +109,56 @@ class ChatLLM(ABC):
         if msg.loss is False:
             return False
         return True
+
+    @classmethod
+    def _check_sample(cls, sample: RawSample, training: bool) -> None:
+        """Basic check of raw conversation sample. All error must be `ValidationError`.
+
+        Rules:
+            * There is only one system in the conversation sequence, and it can only appear at the beginning;
+            * The definition of a tool can only appear in the system and can only appear once.
+            * Tool calls can only appear in the assistant.
+        """
+        if len(sample.messages) == 0:
+            raise ValidationError("Invalid conversation, find an empty sequence of messages.")
+        if not training and (sample.messages[-1].role != Role.USER):
+            raise ValidationError(
+                "Invalid conversation for inference mode, expected to be a user message at the last."
+            )
+        num_sys = 0
+        for i, msg in enumerate(sample.messages):
+            if msg.role == Role.SYSTEM:
+                num_sys += 1
+            if i == 0 and msg.role != Role.SYSTEM:
+                raise ValidationError("Invalid conversation, the conversation sequence must begin with a system message.")
+            if msg.tools and i != 0:
+                raise ValidationError(
+                    "Invalid conversation, tools definition is only allowed to appear "
+                    "in the first and only system message."
+                )
+
+            if msg.tool_calls and msg.role != Role.ASSISTANT:
+                raise ValidationError(
+                    "Invalid conversation, tools calling is only allowed to appear "
+                    "in the assistant message."
+                )
+            if msg.tool_calls and msg.content:
+                raise ValidationError(
+                    "Invalid conversation, tool calling and normal content cannot appear at the same time."
+                )
+        if num_sys != 1:
+            raise ValidationError("Invalid conversation, expected to be only one system message.")
+
+    @classmethod
+    def basic_check_sample(cls, sample: Union[Dict[str, Any], RawSample], training: bool) -> bool:
+        try:
+            if not isinstance(sample, RawSample):
+                sample = RawSample.model_validate(sample)
+            cls._check_sample(sample=sample, training=training)
+            return True
+        except ValidationError as e:
+            return False
+
+    @abstractmethod
+    def custom_check_sample(self, sample: Union[Dict[str, Any], RawSample], training: bool) -> bool:
+        pass
