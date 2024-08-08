@@ -79,15 +79,15 @@ class Qwen2ChatLLM(ChatLLM):
         """
         See: https://huggingface.co/Qwen/Qwen2-72B-Instruct/blob/main/tokenizer_config.json#L31
         """
+        suffix_token_ids = self.tokenizer.encode(text="\n", add_special_tokens=False)  # `List[int]`, i.e., [198]
+
         input_ids = []  # `List[int]`
         labels = []  # `List[int]`
         for i, msg in enumerate(sample.messages):
             signal = self._get_signal(role=msg.role)
             # Indicates whether the current message needs to calculate loss,
             # which is used for efficient training of multi-turn conversation samples.
-            need_loss = training and msg.role == Role.ASSISTANT
-            if need_loss is True and msg.loss is False:
-                need_loss = False
+            trainable = self._is_trainable_msg(msg=msg, training=training)  # `bool`
 
             if msg.tools:
                 if msg.role not in {Role.SYSTEM, Role.USER}:
@@ -98,11 +98,12 @@ class Qwen2ChatLLM(ChatLLM):
                 content += self._textify_msg_tools(msg=msg)
                 content += f"{self._EOM_TOKEN}\n"  # Add eos suffix tokens.
 
+                # Update the system message based on the latest tools.
                 tokenized = self.tokenizer.encode(
                     text=self._get_signal(role=Role.SYSTEM) + content, add_special_tokens=False
                 )  # `List[int]`, create a new latest system.
                 input_ids.extend(tokenized)
-                labels.extend([self.config.ignore_index for _ in range(len(tokenized))])
+                labels.extend([self.ignore_index for _ in range(len(tokenized))])
 
                 if msg.role == Role.USER:
                     content = self._textify_msg_content(msg=msg)
@@ -111,22 +112,24 @@ class Qwen2ChatLLM(ChatLLM):
                         text=signal + content, add_special_tokens=False
                     )  # `List[int]`
                     input_ids.extend(tokenized)
-                    labels.extend([self.config.ignore_index for _ in range(len(tokenized))])
+                    labels.extend([self.ignore_index for _ in range(len(tokenized))])
                 continue
 
             if msg.tool_calls:
-                content = f"{self._textify_msg_tool_calls(msg=msg, need_loss=need_loss)}{self._EOM_TOKEN}\n"
+                content = f"{self._textify_msg_tool_calls(msg=msg, trainable=trainable)}{self._EOM_TOKEN}\n"
                 tokenized = [
                     self.tokenizer.encode(text=t, add_special_tokens=False)
                     for t in (signal, signal + content)
                 ]  # `List[List[int]]`
                 input_ids.extend(tokenized[1])
-                if need_loss:
+                if trainable:
                     labels.extend(
-                        [self.config.ignore_index for _ in range(len(tokenized[0]))] + tokenized[1][len(tokenized[0]):]
+                        [self.ignore_index for _ in range(len(tokenized[0]))] +
+                        tokenized[1][len(tokenized[0]): -len(suffix_token_ids)] +
+                        [self.ignore_index for _ in range(len(suffix_token_ids))]
                     )
                 else:
-                    labels.extend([self.config.ignore_index for _ in range(len(tokenized[1]))])
+                    labels.extend([self.ignore_index for _ in range(len(tokenized[1]))])
                 continue
 
             # Pure content.
@@ -136,12 +139,14 @@ class Qwen2ChatLLM(ChatLLM):
                 for t in (signal, signal + content)
             ]  # `List[List[int]]`
             input_ids.extend(tokenized[1])
-            if need_loss:
+            if trainable:
                 labels.extend(
-                    [self.config.ignore_index for _ in range(len(tokenized[0]))] + tokenized[1][len(tokenized[0]):]
+                    [self.ignore_index for _ in range(len(tokenized[0]))] +
+                    tokenized[1][len(tokenized[0]): -len(suffix_token_ids)] +
+                    [self.ignore_index for _ in range(len(suffix_token_ids))]
                 )
             else:
-                labels.extend([self.config.ignore_index for _ in range(len(tokenized[1]))])
+                labels.extend([self.ignore_index for _ in range(len(tokenized[1]))])
 
         if training:
             return TokenizedSample(input_ids=input_ids, labels=labels)
@@ -175,7 +180,7 @@ class Qwen2ChatLLM(ChatLLM):
         )
         return content
 
-    def _textify_msg_tool_calls(self, msg: Message, need_loss: bool) -> str:
+    def _textify_msg_tool_calls(self, msg: Message, trainable: bool) -> str:
         if msg.role != Role.ASSISTANT:
             raise RuntimeError(
                 f"Invalid role for tool calling, it expected to be \"{Role.ASSISTANT.value}\"."
@@ -187,8 +192,8 @@ class Qwen2ChatLLM(ChatLLM):
 
         tpl = self._FN_CALL_TPL.get(self.language, self.default_language)
         tool_calls = msg.tool_calls
-        if not isinstance(tool_calls, List):
-            tool_calls = [tool_calls]
+        if isinstance(tool_calls, ToolCall):
+            tool_calls = [tool_calls]  # `ToolCall` -> `List[ToolCall]`
         texts = []  # `List[str]`
         for tool_call in tool_calls:
             if tool_call.type != ToolType.FUNCTION:
@@ -200,7 +205,7 @@ class Qwen2ChatLLM(ChatLLM):
                 raise RuntimeError(
                     "Invalid function calling."
                 )
-            if not need_loss:
+            if not trainable:
                 t = tpl.format_map(
                     {
                         "name": tool_call.function.name,
@@ -210,7 +215,7 @@ class Qwen2ChatLLM(ChatLLM):
             else:
                 t = tool_call.model_dump_json(exclude_none=True)  # Do not set indent when need loss.
             texts.append(t)
-        if not need_loss:
+        if not trainable:
             return "".join(texts)
         # TODO: Maybe better for multi tool calls for training?
         return "\n".join([item.strip() for item in texts])

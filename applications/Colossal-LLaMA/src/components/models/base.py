@@ -6,7 +6,7 @@ from enum import unique
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
-from ..data.schema.raw import RawSample, Message
+from ..data.schema.raw import RawSample, Role, Message
 from ..data.schema.tokenized import TokenizedSample
 from ..utils.generic import IGNORE_INDEX, Language
 
@@ -46,15 +46,19 @@ class ChatLLM(ABC):
         self.config = config
         self.tokenizer = None  # `transformers.models.auto.AutoTokenizer`
         self.model = None  # `transformers.models.auto.AutoModelForCausalLM`
+        self.ignore_index = self.config.ignore_index
 
     @abstractmethod
     def init_tokenizer(self) -> None:
-        """Initialize the transformers-based tokenizer for LLMs/VLMs."""
+        """Initialization (instantiation & verification) of the transformers-based tokenizer for LLMs/VLMs.
+        Note that the reason for separating the initialization of the tokenizer and model
+        is to minimize the initialization cost in various usage scenarios.
+        """
         pass
 
     @abstractmethod
     def init_model(self, context: ContextManager = nullcontext()) -> None:
-        """Initialize the transformers-based model for LLMs/VLMs."""
+        """Initialization (instantiation & verification) of the transformers-based model for LLMs/VLMs."""
         pass
 
     @abstractmethod
@@ -93,3 +97,14 @@ class ChatLLM(ABC):
         if return_dict:
             return tokenized_sample.model_dump(exclude_none=True)
         return tokenized_sample
+
+    @classmethod
+    def _is_trainable_msg(cls, msg: Message, training: bool) -> bool:
+        """Determine whether the current message needs to calculate loss."""
+        if not training:
+            return False
+        if msg.role != Role.ASSISTANT:
+            return False
+        if msg.loss is False:
+            return False
+        return True
