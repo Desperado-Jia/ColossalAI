@@ -30,10 +30,6 @@ class ChatLLMConfig(BaseSettings):
         description="Specifies a target value that is ignored and does not contribute to the "
                     "gradient of loss function in PyTorch."
     )
-    language: Union[str, Language] = Field(
-        default=Language.CHINESE,
-        description="Default language setting for automatic completion of prompts in conversations."
-    )
 
 
 class ChatLLM(ABC):
@@ -62,7 +58,7 @@ class ChatLLM(ABC):
         pass
 
     @abstractmethod
-    def _tokenize(self, sample: RawSample, training: bool) -> TokenizedSample:
+    def _tokenize(self, sample: RawSample, training: bool, **kwargs) -> TokenizedSample:
         """Tokenize a raw multi-turn conversation sample and get the tokenized input sample
         for both training & inference of transformers-based model.
         """
@@ -79,7 +75,8 @@ class ChatLLM(ABC):
     def tokenize(self,
                  sample: Union[RawSample, Dict[str, Any]],
                  training: bool = True,
-                 return_dict: bool = False
+                 return_dict: bool = False,
+                 **kwargs
                  ) -> Union[TokenizedSample, Dict[str, Any]]:
         """Tokenize a raw multi-turn conversation sample and get the tokenized input sample
         for both training & inference of transformers-based model.
@@ -90,10 +87,11 @@ class ChatLLM(ABC):
                 f"please execute 'init_tokenizer' method first."
             )
         sample = RawSample.model_validate(sample)  # `RawSample`
-        self._check_sample(sample=sample, training=training)
+        self._base_verify(sample=sample, training=training)
         tokenized_sample = self._tokenize(
             sample=sample,
-            training=training
+            training=training,
+            **kwargs
         )
         if return_dict:
             return tokenized_sample.model_dump(exclude_none=True)
@@ -111,7 +109,7 @@ class ChatLLM(ABC):
         return True
 
     @classmethod
-    def _check_sample(cls, sample: RawSample, training: bool) -> None:
+    def _base_verify(cls, sample: RawSample, training: bool) -> None:
         """Basic check of raw conversation sample. All error must be `ValidationError`.
 
         Rules:
@@ -130,7 +128,9 @@ class ChatLLM(ABC):
             if msg.role == Role.SYSTEM:
                 num_sys += 1
             if i == 0 and msg.role != Role.SYSTEM:
-                raise ValidationError("Invalid conversation, the conversation sequence must begin with a system message.")
+                raise ValidationError(
+                    "Invalid conversation, the conversation sequence must begin with a system message."
+                )
             if msg.tools and i != 0:
                 raise ValidationError(
                     "Invalid conversation, tools definition is only allowed to appear "
@@ -149,16 +149,21 @@ class ChatLLM(ABC):
         if num_sys != 1:
             raise ValidationError("Invalid conversation, expected to be only one system message.")
 
+    @abstractmethod
+    def _verify(self, sample: Union[Dict[str, Any], RawSample], training: bool) -> None:
+        """Custom verification of raw sample."""
+        pass
+
     @classmethod
-    def basic_check_sample(cls, sample: Union[Dict[str, Any], RawSample], training: bool) -> bool:
+    def is_valid(cls, sample: Union[Dict[str, Any], RawSample], training: bool) -> bool:
+        """Check the correctness of the sample for model.
+        Note that the validation workflow for different models may be different (from the custom section).
+        """
         try:
             if not isinstance(sample, RawSample):
                 sample = RawSample.model_validate(sample)
-            cls._check_sample(sample=sample, training=training)
+            cls._base_verify(sample=sample, training=training)
+            cls._verify(sample=sample, training=training)
             return True
         except ValidationError as e:
             return False
-
-    @abstractmethod
-    def custom_check_sample(self, sample: Union[Dict[str, Any], RawSample], training: bool) -> bool:
-        pass

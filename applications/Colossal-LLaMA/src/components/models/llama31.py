@@ -4,6 +4,7 @@ import json
 import re
 from contextlib import nullcontext
 from typing import ContextManager
+from pydantic import ValidationError
 
 from transformers.models.auto import AutoModel, AutoTokenizer
 
@@ -46,7 +47,7 @@ class Llama31ChatLLM(ChatLLM):
     _TOOL_TAG_TOKEN = "<|python_tag|>"
 
     _DEFAULT_SYSTEM = "You are a helpful Assistant."
-    _FN_CALL_INFERENCE_TPL = "The tool \"{name}\" was called with the following arguments:\n{arguments}"
+    _FN_CALL_INFERENCE_TPL = "The tool '{name}' was called with the following arguments:\n{arguments}"
 
     def __init__(self, config: ChatLLMConfig) -> None:
         super().__init__(config=config)
@@ -73,7 +74,7 @@ class Llama31ChatLLM(ChatLLM):
                 trust_remote_code=self.config.trust_remote_code
             )
 
-    def _tokenize(self, sample: RawSample, training: bool) -> TokenizedSample:
+    def _tokenize(self, sample: RawSample, training: bool, **kwargs) -> TokenizedSample:
         input_ids = [self.tokenizer.bos_token_id]  # `List[int]`
         labels = [self.ignore_index]  # `List[int]`
 
@@ -126,6 +127,11 @@ class Llama31ChatLLM(ChatLLM):
         if training:
             return TokenizedSample(input_ids=input_ids, labels=labels)
         # Add generation prompt (inference mode).
+        if not (len(sample.messages) > 0 and sample.messages[-1].role == Role.USER):
+            raise RuntimeError(
+                "Unexpected conversation for chat completion inference, "
+                "the latest message must be user."
+            )
         signal = self._get_signal(role=Role.ASSISTANT)
         input_ids.extend(self.tokenizer.encode(text=signal, add_special_tokens=False))
         return TokenizedSample(input_ids=input_ids)
@@ -183,7 +189,6 @@ class Llama31ChatLLM(ChatLLM):
             )
             func_names.add(tool_call.function.name)
         if len(func_names) != 1:
-            print(tool_calls)
             raise RuntimeError("Only allow call one function at once.")
         sep = "\n" if trainable else "\n\n"
         return sep.join(texts)
@@ -250,9 +255,26 @@ class Llama31ChatLLM(ChatLLM):
             tool_calls=tool_calls
         )
 
-    def custom_check_sample(self, sample: Union[Dict[str, Any], RawSample], training: bool) -> bool:
-        # TODO
-        return True
+    def _verify(self, sample: Union[Dict[str, Any], RawSample], training: bool) -> None:
+        names = set()
+        for i, msg in enumerate(sample.messages):
+            if msg.tool_calls:
+                tool_calls = msg.tool_calls
+                if isinstance(tool_calls, ToolCall):
+                    tool_calls = [tool_calls]
+                for tool_call in tool_calls:
+                    if tool_call.type != ToolType.FUNCTION:
+                        raise ValidationError(
+                            f"Unexpected tool call type ({tool_call.type.value}), "
+                            f"Only support \"{ToolType.FUNCTION.value}\" tool now."
+                        )
+                    if not tool_call.function:
+                        raise ValidationError(
+                            f"Invalid function calling, must be a valid one."
+                        )
+                    names.add(tool_call.function.name)
+        if len(names) != 1:
+            raise ValidationError(f"Only support call one function at once for `{self.__class__.__name__}`.")
 
     @staticmethod
     def _get_tools_prompt(tools: Union[Tool, List[Tool]]) -> str:
