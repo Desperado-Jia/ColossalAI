@@ -11,7 +11,7 @@ from ..data.schema import (
     Content, ContentType,
     Message, Role,
     RawSample, TokenizedSample,
-    Tool, ToolCall, ToolType
+    Tool, ToolCall, ToolType, FunctionCall
 )
 
 
@@ -57,10 +57,6 @@ class Qwen2ChatLLM(ChatLLM):
                           % (_FN_NAME, _FN_ARGS, _FN_RESULT, _FN_EXIT),
     }  # Template for function,
     # see: https://github.com/QwenLM/Qwen-Agent/blob/main/qwen_agent/llm/function_calling.py#L369-L391
-    # _FN_CALL_TPL = {
-    #     Language.CHINESE: "\n\n工具 \"{name}\" 被调用时使用了以下参数：\n{arguments}",
-    #     Language.ENGLISH: "\n\nThe tool \"{name}\" was called with the following arguments:\n{arguments}"
-    # }  # Template for function calling. Note that it only used in inference mode,
     _FN_CALL_TPL = "%s: {name}\n%s: {arguments}" % (_FN_NAME, _FN_ARGS)
     _ARGS_FORMAT = {
         Language.CHINESE: "此工具的输入应为JSON对象。",
@@ -94,8 +90,34 @@ class Qwen2ChatLLM(ChatLLM):
             )
 
     def parse_response(self, text: str) -> Message:
-        pattern = fr"{self._FN_NAME}:(\w+)\n{self._FN_ARGS}(.*?)"
-        raise NotImplementedError()
+        # Parse function calling, e.g.,
+        # '✿FUNCTION✿: get_current_weather\n✿ARGS✿: {"location": "Singapore", "unit": "celsius"}'
+        pattern = fr"{self._FN_NAME}[:|：]*\s*(\w+)\n*{self._FN_ARGS}[:|：]*\s*(.*?)(?=\n*{self._FN_NAME}[:|：]*\s*|$)"
+        items = re.findall(pattern=pattern, string=text)
+        if len(items) == 0:
+            return Message(
+                role=Role.ASSISTANT, content=text
+            )
+        tool_calls = []  # `List[ToolCall]`
+        for item in items:
+            func_name, func_args = item
+            try:
+                func_args = json.loads(func_args)
+            except json.JSONDecodeError:
+                # TODO: warning
+                return Message(
+                    role=Role.ASSISTANT, content=text
+                )
+            tool_call = ToolCall(
+                type=ToolType.FUNCTION,
+                function=FunctionCall(
+                    name=func_name, args=func_args
+                )
+            )
+            tool_calls.append(tool_call)
+        return Message(
+            role=Role.ASSISTANT, content=None, tool_calls=tool_calls
+        )
 
     def _verify(self, sample: Union[Dict[str, Any], RawSample], training: bool) -> None:
         return
