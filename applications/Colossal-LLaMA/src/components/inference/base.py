@@ -115,10 +115,9 @@ class InferenceEngine(ABC):
         # Postprocess of response.
         outputs = []  # `List[Tuple[Message, Usage]]`
         for content, usage in responses:
-            msg = self.llm.process_response_message(text=content)  # Contains the situation handling logic
+            msg = self.llm.parse_response(text=content)  # Contains the situation handling logic
             # for complex scenarios (e.g., tool calling)
-            if msg.role != Role.ASSISTANT:
-                raise ValueError(f"Invalid response role, must be \"{Role.ASSISTANT.value}\".")
+            self._verify_response(resp=msg)
             outputs.append((msg, usage))
 
         if not batched:
@@ -146,6 +145,11 @@ class InferenceEngine(ABC):
         if num_tool_call != num_tool_exec:
             raise RuntimeError("Invalid prompt conversation, tool call and execution times are different.")
 
+    @classmethod
+    def _verify_response(cls, resp: Message, prompt: List[Message] = None) -> None:
+        if resp.role != Role.ASSISTANT:
+            raise ValueError(f"Invalid response role, must be \"{Role.ASSISTANT.value}\".")
+
     @staticmethod
     def _verify_msg(msg: Message) -> None:
         # Verification of tools.
@@ -164,6 +168,3 @@ class InferenceEngine(ABC):
             raise RuntimeError(
                 f"Invalid `{Message.__name__}`, tool_calls and content cannot be effective at the same time."
             )
-
-
-
