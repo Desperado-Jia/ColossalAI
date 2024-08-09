@@ -57,7 +57,11 @@ class Qwen2ChatLLM(ChatLLM):
                           % (_FN_NAME, _FN_ARGS, _FN_RESULT, _FN_EXIT),
     }  # Template for function,
     # see: https://github.com/QwenLM/Qwen-Agent/blob/main/qwen_agent/llm/function_calling.py#L369-L391
-    _FN_CALL_TPL = "%s: {name}\n%s: {arguments}" % (_FN_NAME, _FN_ARGS)
+    _FN_CALL_TPL_TRAINABLE = "%s: {name}\n%s: {arguments}" % (_FN_NAME, _FN_ARGS)
+    _FN_CALL_TPL_UNTRAINABLE = {
+        Language.CHINESE: "工具 '{name}' 被调用时使用了以下参数：\n{arguments}",
+        Language.ENGLISH: "The tool '{name}' was called with the following arguments:\n{arguments}"
+    }
     _ARGS_FORMAT = {
         Language.CHINESE: "此工具的输入应为JSON对象。",
         Language.ENGLISH: "Format the arguments as a JSON object."
@@ -91,9 +95,13 @@ class Qwen2ChatLLM(ChatLLM):
 
     def parse_response(self, text: str) -> Message:
         # Parse function calling, e.g.,
-        # '✿FUNCTION✿: get_current_weather\n✿ARGS✿: {"location": "Singapore", "unit": "celsius"}'
+        # '✿FUNCTION✿: get_current_weather\n✿ARGS✿: {"location": "Singapore", "unit": "celsius"}✿RESULT✿'
+        offset = text.find(self._FN_RESULT)
+        if offset <= 0:
+            return Message(role=Role.ASSISTANT, content=text)
+        text_for_tool_callings = text[: offset]
         pattern = fr"{self._FN_NAME}[:|：]*\s*(\w+)\n*{self._FN_ARGS}[:|：]*\s*(.*?)(?=\n*{self._FN_NAME}[:|：]*\s*|$)"
-        items = re.findall(pattern=pattern, string=text)
+        items = re.findall(pattern=pattern, string=text_for_tool_callings)
         if len(items) == 0:
             return Message(
                 role=Role.ASSISTANT, content=text
@@ -111,7 +119,7 @@ class Qwen2ChatLLM(ChatLLM):
             tool_call = ToolCall(
                 type=ToolType.FUNCTION,
                 function=FunctionCall(
-                    name=func_name, args=func_args
+                    name=func_name, arguments=func_args
                 )
             )
             tool_calls.append(tool_call)
@@ -150,7 +158,7 @@ class Qwen2ChatLLM(ChatLLM):
                 continue
 
             if msg.tool_calls:  # Must appear in assistant, see: `ChatLLM._base_verify`
-                content = self._textify_tool_calls(msg=msg)
+                content = self._textify_tool_calls(msg=msg, trainable=trainable, language=language)
                 content += f"{self._EOM_TOKEN}\n"  # Add eos suffix tokens.
 
                 tokenized = [
@@ -187,11 +195,11 @@ class Qwen2ChatLLM(ChatLLM):
         if training:
             return TokenizedSample(input_ids=input_ids, labels=labels)
         # Add generation prompt for inference mode.
-        if not (len(sample.messages) > 0 and sample.messages[-1].role == Role.USER):
-            raise RuntimeError(
-                "Unexpected conversation for chat completion inference, "
-                "the latest message must be user."
-            )
+        # if not (len(sample.messages) > 0 and sample.messages[-1].role == Role.USER):
+        #     raise RuntimeError(
+        #         "Unexpected conversation for chat completion inference, "
+        #         "the latest message must be user."
+        #     )
         signal = self._get_signal(role=Role.ASSISTANT)
         input_ids.extend(
             self.tokenizer.encode(text=signal, add_special_tokens=False)
@@ -199,7 +207,7 @@ class Qwen2ChatLLM(ChatLLM):
         return TokenizedSample(input_ids=input_ids)
 
     @classmethod
-    def _textify_tool_calls(cls, msg: Message) -> str:
+    def _textify_tool_calls(cls, msg: Message, trainable: bool, language: Language) -> str:
         if msg.role != Role.ASSISTANT:
             raise RuntimeError(
                 f"Invalid role for tool calling, it expected to be \"{Role.ASSISTANT.value}\"."
@@ -214,8 +222,12 @@ class Qwen2ChatLLM(ChatLLM):
             tool_calls = [tool_calls]  # `ToolCall` -> `List[ToolCall]`
         texts = []  # `List[str]`
         for tool_call in tool_calls:
-            texts.append(cls._parse_tool_call(tool_call=tool_call))
-        return "\n\n".join(texts)
+            texts.append(
+                cls._parse_tool_call(tool_call=tool_call, trainable=trainable, language=language)
+            )
+        if not trainable:
+            return "\n".join(texts)
+        return "\n".join(texts) + cls._FN_RESULT
 
     @classmethod
     def _textify_content(cls, msg: Message) -> str:
@@ -255,7 +267,7 @@ class Qwen2ChatLLM(ChatLLM):
         return content
 
     @classmethod
-    def _parse_tool_call(cls, tool_call: ToolCall) -> str:
+    def _parse_tool_call(cls, tool_call: ToolCall, trainable: bool, language: Language) -> str:
         if tool_call.type != ToolType.FUNCTION:
             raise RuntimeError(
                 f"Unexpected tool call type ({tool_call.type.value}), "
@@ -265,12 +277,21 @@ class Qwen2ChatLLM(ChatLLM):
             raise RuntimeError(
                 f"Invalid function calling, must be a valid one."
             )
-        text = cls._FN_CALL_TPL.format_map(
-            {
-                "name": tool_call.function.name,
-                "arguments": json.dumps(tool_call.function.arguments, ensure_ascii=False)
-            }
-        )
+        if trainable:
+            text = cls._FN_CALL_TPL_TRAINABLE.format_map(
+                {
+                    "name": tool_call.function.name,
+                    "arguments": json.dumps(tool_call.function.arguments, ensure_ascii=False)
+                }
+            )
+        else:
+            tpl = cls._FN_CALL_TPL_UNTRAINABLE.get(language, cls._DEFAULT_LANGUAGE)
+            text = tpl.format_map(
+                {
+                    "name": tool_call.function.name,
+                    "arguments": json.dumps(tool_call.function.arguments, ensure_ascii=False)
+                }
+            )
         return text
 
     @classmethod
